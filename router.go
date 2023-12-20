@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 )
@@ -26,14 +25,29 @@ type SwapRequest struct {
     GasPrice   float64
 }
 
-func parseSwapRequest(request string) (SwapRequest, error) {
-    var swapReq SwapRequest
+func ParseSwapRequest(request string) (SwapRequest, error) {
     params := strings.Split(request, "&")
+    swapReq, err := parseQuery(params)
+    if err != nil {
+        return swapReq, err
+    }
 
-    for _, p := range params {
+    return swapReq, nil
+}
+
+func parseQuery(q []string) (swapReq SwapRequest, err error) {
+    if len(q) == 0 {
+        return swapReq, EmptyQueryString
+    }
+
+    for _, p := range q {
         keyValue := strings.Split(p, "=")
         if len(keyValue) != 2 {
             return swapReq, fmt.Errorf("invalid parameter: %s", p)
+        }
+
+        if keyValue[1] == "" {
+            return swapReq, InvalidQueryString
         }
 
         key, value := keyValue[0], keyValue[1]
@@ -77,38 +91,53 @@ func parseSwapRequest(request string) (SwapRequest, error) {
 }
 
 type Route struct {
-    Path      []string
-    Liquidity float64
+    Path       []string
+    PathInfo   []DexPoolInfo
 }
 
-func findExchangeRoutes(req SwapRequest, dexPools map[string]float64) ([]Route, error) {
-    var findRoutes func(currentToken string, path []string, liquidity float64) []Route
-    findRoutes = func(currentToken string, path []string, liquidity float64) []Route {
-        if len(path) > 3 {
+func FindExchangeRoutes(req SwapRequest, dexPools DexPoolInfoMap) ([]Route, error) {
+    var findRoutes func(currentToken string, path []string, pathInfo []DexPoolInfo, visited map[string]bool) []Route
+    findRoutes = func(currentToken string, path []string, pathInfo []DexPoolInfo, visited map[string]bool) []Route {
+        if visited[currentToken] {
             return nil
         }
 
+        // cycle detection
+        visited[currentToken] = true
         var routes []Route
-        for pair, poolLiquidity := range dexPools {
+
+        for pair, info := range dexPools {
             tokens := strings.Split(pair, "/")
             if tokens[0] != currentToken {
                 continue
             }
 
             newPath := append([]string(nil), path...)
-            newPath = append(newPath, pair)
-            newLiquidity := math.Min(liquidity, poolLiquidity)
+            newPath = append(newPath, tokens[1])
+            newPathInfo := append([]DexPoolInfo(nil), pathInfo...)
+            newPathInfo = append(newPathInfo, info)
 
             if tokens[1] == req.ToToken {
-                routes = append(routes, Route{Path: newPath, Liquidity: newLiquidity})
+                routes = append(routes, Route{Path: newPath, PathInfo: newPathInfo})
             } else {
-                routes = append(routes, findRoutes(tokens[1], newPath, newLiquidity)...)
+                routes = append(routes, findRoutes(tokens[1], newPath, newPathInfo, copyMap(visited))...)
             }
         }
+
+        visited[currentToken] = false
         return routes
     }
 
-    return findRoutes(req.FromToken, []string{req.FromToken}, math.MaxFloat64), nil
+    return findRoutes(req.FromToken, []string{req.FromToken}, []DexPoolInfo{}, make(map[string]bool)), nil
+}
+
+// copyMap returns a copy of the original map.
+func copyMap(original map[string]bool) map[string]bool {
+    copy := make(map[string]bool)
+    for key, value := range original {
+        copy[key] = value
+    }
+    return copy
 }
 
 func formatRoute(route Route) string {

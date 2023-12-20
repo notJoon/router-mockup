@@ -17,7 +17,7 @@ func TestParseSwapRequest(t *testing.T) {
         GasPrice:   50.0,
     }
 
-    result, err := parseSwapRequest(testRequest)
+    result, err := ParseSwapRequest(testRequest)
     if err != nil {
         t.Errorf("parseSwapRequest returned an error: %v", err)
     }
@@ -26,42 +26,68 @@ func TestParseSwapRequest(t *testing.T) {
     }
 }
 
-var dexPools = map[string]float64 {
-	"FOO/BAR": 100000.0,
-	"BAR/FOO": 100000.0,
-	"FOO/BAZ": 200000.0,
-	"BAZ/FOO": 200000.0,
-	"FOO/QUX": 300000.0,
-	"QUX/FOO": 300000.0,
-	"BAR/BAZ": 400000.0,
-	"BAZ/BAR": 400000.0,
-	"BAR/QUX": 500000.0,
-	"QUX/BAR": 500000.0,
-	"BAZ/QUX": 600000.0,
-	"QUX/BAZ": 600000.0,
+func TestInvalidSwapRequestHasReceived(t *testing.T) {
+    queries := []struct {
+        name string
+        req  string
+    }{
+        {name: "empty", req: ""},
+        {name: "missing from value", req: "from=&to=BAR&amount=100.0&slippage=0.01&trader=0xExampleAddress&minReceive=99.0&gasPrice=50"},
+        {name: "missing to value", req: "from=FOO&to=&amount=100.0&slippage=0.01&trader=0xExampleAddress&minReceive=99.0&gasPrice=50"},
+        {name: "missing amount value", req: "from=FOO&to=BAR&amount=&slippage=0.01&trader=0xExampleAddress&minReceive=99.0&gasPrice=50"},
+        {name: "missing slippage value", req: "from=FOO&to=BAR&amount=100.0&slippage=&trader=0xExampleAddress&minReceive=99.0&gasPrice=50"},
+        {name: "missing trader value", req: "from=FOO&to=BAR&amount=100.0&slippage=0.01&trader=&minReceive=99.0&gasPrice=50"},
+        {name: "missing minReceive value", req: "from=FOO&to=BAR&amount=100.0&slippage=0.01&trader=0xExampleAddress&minReceive=&gasPrice=50"},
+        {name: "missing gasPrice value", req: "from=FOO&to=BAR&amount=100.0&slippage=0.01&trader=0xExampleAddress&minReceive=99.0&gasPrice="},
+    }
+
+    for _, tc := range queries {
+        _, err := ParseSwapRequest(tc.req)
+        if err == nil {
+            t.Errorf("parseSwapRequest(%s) did not return an error", tc.name)
+        }
+    }
 }
 
 func TestFindExchangeRoutes(t *testing.T) {
-    testCases := []struct {
-        fromToken string
-        toToken   string
-    }{
-        {"FOO", "BAZ"},
-        {"BAR", "QUX"},
-        {"BAZ", "FOO"},
-		{"FOO", "QQQ"},
+    testRequest := SwapRequest{
+        FromToken: "FOO",
+        ToToken:   "BAZ",
+        Amount:    1000.0,
     }
 
-    for _, tc := range testCases {
-        routes, err := findExchangeRoutes(SwapRequest{FromToken: tc.fromToken, ToToken: tc.toToken}, dexPools)
-        if err != nil {
-            t.Errorf("findExchangeRoutes returned an error for %s/%s: %v", tc.fromToken, tc.toToken, err)
-            continue
+    testDexPools := DexPools
+
+    routes, err := FindExchangeRoutes(testRequest, testDexPools)
+    if err != nil {
+        t.Errorf("FindExchangeRoutes returned an error: %v", err)
+    }
+
+    if len(routes) == 0 {
+        t.Errorf("No routes found for request %+v", testRequest)
+    }
+
+    for _, route := range routes {
+        if len(route.Path) == 0 || len(route.PathInfo) == 0 {
+            t.Errorf("Route or PathInfo is empty for route: %+v", route)
         }
 
-        for _, route := range routes {
-            formattedRoute := formatRoute(route)
-			fmt.Printf("path for %s/%s: %s\n", tc.fromToken, tc.toToken, formattedRoute)
+        if containsCycle(route.Path) {
+            t.Errorf("Route contains a cycle: %+v", route)
         }
+
+        format := formatRoute(route)
+        fmt.Println(format)
     }
+}
+
+func containsCycle(path []string) bool {
+    visited := make(map[string]bool)
+    for _, token := range path {
+        if _, found := visited[token]; found {
+            return true
+        }
+        visited[token] = true
+    }
+    return false
 }
