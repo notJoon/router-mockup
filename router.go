@@ -3,8 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
-	"strings"
+	"math"
 	"strconv"
+	"strings"
 )
 
 var (
@@ -81,69 +82,55 @@ type Route struct {
 }
 
 func findExchangeRoutes(req SwapRequest, dexPools map[string]float64) ([]Route, error) {
-    var possibleRoutes []Route
-    for fromToken := range dexPools {
-        for toToken := range dexPools {
-            if fromToken[:3] == req.FromToken && toToken[4:] == req.ToToken {
-                intermediateToken := fromToken[4:]
-                if intermediateToken == toToken[:3] {
-                    possibleRoutes = append(possibleRoutes, Route{
-                        Path:      []string{req.FromToken, intermediateToken, req.ToToken},
-                        Liquidity: dexPools[fromToken] * dexPools[toToken],
-                    })
-                }
+    var findRoutes func(currentToken string, path []string, liquidity float64) []Route
+    findRoutes = func(currentToken string, path []string, liquidity float64) []Route {
+        if len(path) > 3 {
+            return nil
+        }
+
+        var routes []Route
+        for pair, poolLiquidity := range dexPools {
+            tokens := strings.Split(pair, "/")
+            if tokens[0] != currentToken {
+                continue
+            }
+
+            newPath := append([]string(nil), path...)
+            newPath = append(newPath, pair)
+            newLiquidity := math.Min(liquidity, poolLiquidity)
+
+            if tokens[1] == req.ToToken {
+                routes = append(routes, Route{Path: newPath, Liquidity: newLiquidity})
+            } else {
+                routes = append(routes, findRoutes(tokens[1], newPath, newLiquidity)...)
             }
         }
-
-        directRouteKey := fmt.Sprintf("%s/%s", req.FromToken, req.ToToken)
-        if liquidity, exists := dexPools[directRouteKey]; exists {
-            possibleRoutes = append(possibleRoutes, Route{
-                Path:      []string{req.FromToken, req.ToToken},
-                Liquidity: liquidity,
-            })
-        }
+        return routes
     }
 
-    var routes []Route
-    for _, route := range possibleRoutes {
-        if len(route.Path) <= 4 && route.Liquidity > 0 {
-            routes = append(routes, route)
-        }
-    }
-
-	// for debug
-	for _, route := range routes {
-		fmt.Println(formatRoute(route, req.FromToken, req.ToToken))
-	}
-
-    if len(routes) == 0 {
-        return nil, fmt.Errorf("no available routes found")
-    }
-
-    return routes, nil
+    return findRoutes(req.FromToken, []string{req.FromToken}, math.MaxFloat64), nil
 }
 
-func formatRoute(route Route, fromToken string, toToken string) string {
+func formatRoute(route Route) string {
     if len(route.Path) == 0 {
         return ""
     }
 
-    if route.Path[0] != fromToken || route.Path[len(route.Path)-1] != toToken {
-        return fmt.Sprintf("Invalid route: does not start with %s or end with %s", fromToken, toToken)
-    }
-
     var pathStr strings.Builder
-    pathStr.WriteString(fromToken)
+    for i, pair := range route.Path {
+        if i > 0 {
+            pathStr.WriteString(" -> ")
+        }
+        pathStr.WriteString(pair)
 
-    for i := 1; i < len(route.Path)-1; i += 2 {
-        pathStr.WriteString(" -> ")
-        pathStr.WriteString(route.Path[i])
-        pathStr.WriteString("/")
-        pathStr.WriteString(route.Path[i+1])
+        if i == len(route.Path)-1 {
+            tokens := strings.Split(pair, "/")
+            if len(tokens) == 2 {
+                pathStr.WriteString(" -> ")
+                pathStr.WriteString(tokens[1])
+            }
+        }
     }
-
-    pathStr.WriteString(" -> ")
-    pathStr.WriteString(toToken)
 
     return pathStr.String()
 }
